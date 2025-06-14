@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # === CONFIGURATION ===
-VENV_PATH="/Users/mickey/tovia_ai_assistant/mimic3_env"
+VENV_PATH="/Users/mickey/mimic3_env"
 PYTHON_SCRIPT="/Users/mickey/tovia_ai_assistant/basic_tts_assist.py"
 VOICE_SERVER_LOG="mimic3.log"
 
