@@ -33,7 +33,7 @@ voice = "en_UK/apope_low" # "en_US/vctk_low"
 subprocess.run(["mimic3", "--voice", voice, " "], stdout=subprocess.DEVNULL)
 
 # Load offline Vosk model (download first from Vosk's website)
-MODEL_PATH = "/Users/mickey/tovia_ai_assistant/vosk_model/vosk-model-small-en-us-0.15"
+MODEL_PATH = "/Users/mickey/vosk_model/vosk-model-small-en-us-0.15"
 if not os.path.exists(MODEL_PATH):
     print("Please download the Vosk model and place it in the 'model' folder.")
     exit(1)
