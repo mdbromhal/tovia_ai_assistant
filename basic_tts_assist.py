@@ -62,12 +62,10 @@ def make_callback(q):
     return callback
 
 
-def server_speak(text, voice):
+def server_speak(text, voice, q):
     global bot_speaking
     bot_speaking = True
     
-    # text = "Hello from the server!"
-    # voice = "en_US/cmu-arctic_low"
     url = "http://localhost:59125/api/tts"
 
     response = requests.post(url, data=text, params={"voice": voice})
@@ -82,6 +80,10 @@ def server_speak(text, voice):
     # Resetting flag
     bot_speaking = False
 
+    # Clearing any leftover audio
+    with q.mutex:
+        q.queue.clear()
+
 
 def start_listening(STT_MODEL_PATH):
     """Starts vosk's model listening to the user with the system's microphone."""
@@ -92,6 +94,8 @@ def start_listening(STT_MODEL_PATH):
 
     # Initialize Vosk speech recognizer
     model = Model(STT_MODEL_PATH) # Loads the vosk model
+
+
     rec = KaldiRecognizer(model, 16000) # Sample rate as 16kHz (standard for voice)
     rec.SetWords(True) # Words level processing
 
@@ -100,7 +104,7 @@ def start_listening(STT_MODEL_PATH):
     q = queue.Queue() # Creates a queue to store the audio data -> avoid lag
 
     # Start listening
-    print("Say something (Ctrl+C to exit)...")
+    print("Say something starting with 'philip' (Ctrl+C to exit)...")
 
     return q, rec, samplerate
 
@@ -117,6 +121,7 @@ def main():
     STT_MODEL_PATH = "/Users/mickey/vosk_model/vosk-model-small-en-us-0.15"
     wake_words = ['tovia', 'to via', 'toby']
     sleep_words = ['goodnight', 'good bye', 'goodbye', 'shut down', 'later gater', 'see you later']
+    ai_model = "codellama:latest"
 
 
     # Functions
@@ -131,26 +136,33 @@ def main():
         with stream:
             while True:
                 data = q.get() # Grabs audio
+                # print("Listening...", end="", flush=True)
+                print("\rListening...", end="", flush=True)
+
                 if rec.AcceptWaveform(data): # Is speech detected?
                     result = json.loads(rec.Result()) # Decodes the speech
+                    
+                    # Else, listen and get command
                     command = result.get("text", "").lower() # Responds to what was said
+
+                    if command != "":
+                        print(f"\nYou said: {command}", flush=True)
 
                     # # Basic command execution
                     if is_trigger_word(sleep_words, command):
-                        server_speak("Goodbye, powering down.", voice)
+                        server_speak("Goodbye, powering down.", voice, q)
                         break
+
 
                     if "philip" in command:
                     # if is_fuzzy_trigger("philip", command):
                         print("\a", end='', flush=True)
                         
-                        actual_request = command.replace("philip", "").strip()
-
-                        print(f"You said: {actual_request}", flush=True)
+                        actual_request = command.replace("philip", "")
 
                         response = requests.post(
                             "http://localhost:11434/api/generate",
-                            json={"model": "llama3.2:latest", 
+                            json={"model": ai_model, 
                                 "prompt": actual_request,
                                 # "messages": [
                                 #     {"role": "system", "content": "Your name is Tovia. You are a helpful and witty assistant that helps develop software and robotics applications."},
@@ -184,7 +196,7 @@ def main():
                                 # Speak every 5-7 words or with punctuation
                                 if token in {".", "!", "?"}:
                                     if buffer.strip():
-                                        server_speak(buffer.strip(), voice)
+                                        server_speak(buffer.strip(), voice, q)
                                         buffer = ""
                                         word_count = 0
                                 
@@ -193,10 +205,10 @@ def main():
                         
                         # Finish up leftover text
                         if buffer.strip():
-                            server_speak(buffer.strip(), voice)
+                            server_speak(buffer.strip(), voice, q)
                     
-                    else:
-                        print(f"You said: {command.strip()}", flush=True)
+                    # else:
+                    #     print(f"You said: {command.strip()}", flush=True)
 
     except KeyboardInterrupt:
         print("\nTovia: Goodbye! Shutting down gracefully.")
@@ -222,6 +234,13 @@ if __name__ == "__main__":
 # pip install mycroft-mimic3-tts
 
 # pip freeze > requirements.txt
+
+# ollama rm llama2
+
+# ollama pull mistral
+
+# sudo tcpdump -i any
+
 
 
 

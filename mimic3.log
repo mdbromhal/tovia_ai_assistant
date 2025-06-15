@@ -1,3 +1,3 @@
 INFO:mimic3_http.__main__:Starting web server
-[2025-06-14 20:52:52 -0400] [45548] [INFO] Running on http://0.0.0.0:59125 (CTRL + C to quit)
+[2025-06-15 08:30:15 -0400] [46298] [INFO] Running on http://0.0.0.0:59125 (CTRL + C to quit)
 INFO:hypercorn.error:Running on http://0.0.0.0:59125 (CTRL + C to quit)
