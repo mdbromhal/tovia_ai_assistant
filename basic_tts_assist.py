@@ -24,62 +24,45 @@ import subprocess
 import requests
 import time
 import sys
+from thefuzz import process, fuzz
+
 
 # Global flags
 bot_speaking = False
 
-# Warming up the voice
-voice = "en_UK/apope_low" # "en_US/vctk_low"
-subprocess.run(["mimic3", "--voice", voice, " "], stdout=subprocess.DEVNULL)
 
-# Load offline Vosk model (download first from Vosk's website)
-MODEL_PATH = "/Users/mickey/vosk_model/vosk-model-small-en-us-0.15"
-if not os.path.exists(MODEL_PATH):
-    print("Please download the Vosk model and place it in the 'model' folder.")
-    exit(1)
+def is_fuzzy_trigger(trigger, string):
+    """Uses fuzz to see if a word loosely matches a trigger word."""
+    if fuzz.ratio(trigger, string) > 85:
+        return True
+    else:
+        return False
 
-# Initialize Vosk speech recognizer
-model = Model(MODEL_PATH) # Loads the vosk model
-rec = KaldiRecognizer(model, 16000) # Sample rate as 16kHz (standard for voice)
-rec.SetWords(True) # Words level processing
 
-# Audio recording parameters
-samplerate = 16000 # How often sound is processed per second
-q = queue.Queue() # Creates a queue to store the audio data -> avoid lag
+def is_trigger_word(list_words, string):
+    """Returns True or False depending on if the trigger word for the action is in the string."""
+    if any(word in string for word in list_words):
+        return True
+    else:
+        return False
+
 
 # Callback function for live audio processing
-def callback(indata, frames, time, status):
-    """
-    Listens for audio input with microphone. Converts raw sound data to bytes that Vosk understands.
-    """
-    #if status:
-    if not bot_speaking: # Only listen if bot not speaking
-        print(status)
-        #q.put(np.frombuffer(indata, dtype=np.int16))
-        q.put(bytes(indata)) # Convert to bytes that Vosk likes
-
-# def speak(text):
-#     """
+def make_callback(q):
+    def callback(indata, frames, time, status):
+        """
+        Listens for audio input with microphone. Converts raw sound data to bytes that Vosk understands.
+        """
+        #if status:
+        if not bot_speaking: # Only listen if bot not speaking
+            # print(status)
+            #q.put(np.frombuffer(indata, dtype=np.int16))
+            q.put(bytes(indata)) # Convert to bytes that Vosk likes
     
-#     """
-#     #subprocess.run(["piper", "--wave", "output.wav", "--text", text])
-#     # subprocess.run(["afplay", "output.wav"])
+    return callback
 
 
-# #text = "Hello from a script!"
-    
-#     #voice = "en_US/vctk_low"
-#     output = "output.wav"
-
-#     subprocess.run([
-#         "mimic3",
-#         "--voice", voice,
-#         text
-#     ], stdout=open(output, "wb"))
-
-#     subprocess.run(["afplay", output])
-
-def server_speak(text):
+def server_speak(text, voice):
     global bot_speaking
     bot_speaking = True
     
@@ -100,118 +83,129 @@ def server_speak(text):
     bot_speaking = False
 
 
-# Start listening
-print("Say something (Ctrl+C to exit)...")
+def start_listening(STT_MODEL_PATH):
+    """Starts vosk's model listening to the user with the system's microphone."""
+    # Load offline Vosk model (download first from Vosk's website)
+    if not os.path.exists(STT_MODEL_PATH):
+        print("Please download the Vosk model and place it in the 'model' folder.")
+        exit(1)
 
-# Starts listening w. sounddevice
-stream = sd.RawInputStream(samplerate=samplerate, blocksize=8000, dtype='int16', # Blocksize in small chunks -> efficient
-                       channels=1, callback=callback) # Callback to store audio
+    # Initialize Vosk speech recognizer
+    model = Model(STT_MODEL_PATH) # Loads the vosk model
+    rec = KaldiRecognizer(model, 16000) # Sample rate as 16kHz (standard for voice)
+    rec.SetWords(True) # Words level processing
 
-try:
-    with stream:
-        while True:
-            data = q.get() # Grabs audio
-            if rec.AcceptWaveform(data): # Is speech detected?
-                result = json.loads(rec.Result()) # Decodes the speech
-                command = result.get("text", "").lower() # Responds to what was said
-                print(f"You said: {command.strip()}", flush=True)
+    # Audio recording parameters
+    samplerate = 16000 # How often sound is processed per second
+    q = queue.Queue() # Creates a queue to store the audio data -> avoid lag
 
-                # # Basic command execution
-                if ("shut down" in command) or ("goodbye" in command):
-                    server_speak("Goodbye, powering down.")
-                    break
-                # if "hello" in command:
-                #     print("Jarvis: Hello, how can I assist?")
-                #     server_speak("Hello, how may I assist?")
-                # elif "exit" in command:
-                #     print("Jarvis: Goodbye!")
-                #     server_speak("Goodbye!")
-                #     break
-                # elif "how are you" in command:
-                #     server_speak("I think I'm fine, thank you. Not quite sure cause this is you testing my voice. Not sure what I think about that.")
-                # elif "how's the weather today" in command:
-                #     server_speak("it's gorgeous! Go outside you momma bear!")
-                # elif "would you like a pork chop" in command:
-                #     server_speak("I got one in my belly button, thank you very much.")
-                # else:
-                #     print("Jarvis: Command not recognized.")
+    # Start listening
+    print("Say something (Ctrl+C to exit)...")
 
-                response = requests.post(
-                    "http://localhost:11434/api/generate",
-                    json={"model": "llama3.2:latest", 
-                        "prompt": command,
-                        # "messages": [
-                        #     {"role": "system", "content": "Your name is Tovia. You are a helpful and witty assistant that helps develop software and robotics applications."},
-                        #     {"role": "user", "content": command}
-                        # ]
-                    },
-                    stream=True # Because llama3.2 is responding in a stream format
-                )
+    return q, rec, samplerate
 
-                # buffer = "" # Make a buffer to make speech sound more natural
-                # for line in response.iter_lines(): # Each line of ollama stream
-                #     if line: # Skipping empty lines
-                #         data = json.loads(line) # JSON to Python dict
-                #         token = data.get("response", "") # Gets response from chunk
-                #         buffer += token
 
-                #         # Speak when we've collected enough words to a sentence
-                #         if token in {".", "?", "!"} or len(buffer.split()) >= 5:
-                #             server_speak(buffer)
-                #             buffer = ""
+def warm_up_voice(voice):
+    """Warms up voice with mimic3 so assistant can talk quicker."""
+    subprocess.run(["mimic3", "--voice", voice, " "], stdout=subprocess.DEVNULL)
+
+
+def main():
+
+    # Variables
+    voice = "en_UK/apope_low" # "en_US/vctk_low"
+    STT_MODEL_PATH = "/Users/mickey/vosk_model/vosk-model-small-en-us-0.15"
+    wake_words = ['tovia', 'to via', 'toby']
+    sleep_words = ['goodnight', 'good bye', 'goodbye', 'shut down', 'later gater', 'see you later']
+
+
+    # Functions
+    warm_up_voice(voice)
+    q, rec, samplerate = start_listening(STT_MODEL_PATH)
+
+    # Starts listening w. sounddevice
+    stream = sd.RawInputStream(samplerate=samplerate, blocksize=8000, dtype='int16', # Blocksize in small chunks -> efficient
+                        channels=1, callback=make_callback(q)) # Callback to store audio
+    
+    try:
+        with stream:
+            while True:
+                data = q.get() # Grabs audio
+                if rec.AcceptWaveform(data): # Is speech detected?
+                    result = json.loads(rec.Result()) # Decodes the speech
+                    command = result.get("text", "").lower() # Responds to what was said
+
+                    # # Basic command execution
+                    if is_trigger_word(sleep_words, command):
+                        server_speak("Goodbye, powering down.", voice)
+                        break
+
+                    if "philip" in command:
+                    # if is_fuzzy_trigger("philip", command):
+                        print("\a", end='', flush=True)
                         
-                #         # If stream ended, speak leftovers and exit
-                #         if data.get("done", False):
-                #             if buffer.strip():
-                #                 server_speak(buffer)
-                #             break
+                        actual_request = command.replace("philip", "").strip()
 
-                # Showing that Tovia is thinking
-                print("\nTovia: Thinking...", end="\r", flush=True)
+                        print(f"You said: {actual_request}", flush=True)
 
-                buffer = ""
-                word_count = 0
-                first_token = True
-                for line in response.iter_lines():
-                    if line:
-                        data = json.loads(line)
-                        token = data.get("response", "")
+                        response = requests.post(
+                            "http://localhost:11434/api/generate",
+                            json={"model": "llama3.2:latest", 
+                                "prompt": actual_request,
+                                # "messages": [
+                                #     {"role": "system", "content": "Your name is Tovia. You are a helpful and witty assistant that helps develop software and robotics applications."},
+                                #     {"role": "user", "content": command}
+                                # ]
+                            },
+                            stream=True # Because llama3.2 is responding in a stream format
+                        )
 
-                        if not token:
-                            continue
+                        buffer = ""
+                        word_count = 0
+                        first_token = True
+                        for line in response.iter_lines():
+                            if line:
+                                data = json.loads(line)
+                                token = data.get("response", "")
 
-                        # Print first token with the label
-                        if first_token:
-                            print("Tovia: ", end="", flush=True)
-                            first_token = False
+                                if not token:
+                                    continue
 
-                        # print each token without a newline
-                        print(token, end="", flush=True)
-                        buffer += token
-                        word_count += token.count(" ")
+                                # Print first token with the label
+                                if first_token:
+                                    print("Tovia: ", end="", flush=True)
+                                    first_token = False
 
-                        # Speak every 5-7 words or with punctuation
-                        if token in {".", "!", "?"}:
-                            if buffer.strip():
-                                server_speak(buffer.strip())
-                                buffer = ""
-                                word_count = 0
+                                # print each token without a newline
+                                print(token, end="", flush=True)
+                                buffer += token
+                                word_count += token.count(" ")
+
+                                # Speak every 5-7 words or with punctuation
+                                if token in {".", "!", "?"}:
+                                    if buffer.strip():
+                                        server_speak(buffer.strip(), voice)
+                                        buffer = ""
+                                        word_count = 0
+                                
+                                if data.get("done", False):
+                                    break
                         
-                        if data.get("done", False):
-                            break
-                
-                # Finish up leftover text
-                if buffer.strip():
-                    server_speak(buffer.strip())
-                
-                print()
-                # llama_response = str(response.text) # ["response"]
-                # print(f"Tovia: {final_response}")
-                # server_speak(final_response)
-except KeyboardInterrupt:
-    print("\nTovia: Goodbye! Shutting down gracefully.")
-    stream.close()
-    sys.exit(0)
+                        # Finish up leftover text
+                        if buffer.strip():
+                            server_speak(buffer.strip(), voice)
+                    
+                    else:
+                        print(f"You said: {command.strip()}", flush=True)
+
+    except KeyboardInterrupt:
+        print("\nTovia: Goodbye! Shutting down gracefully.")
+        stream.close()
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
 
 
 
@@ -226,4 +220,8 @@ except KeyboardInterrupt:
 # source tovia_env/bin/activate
 
 # pip install mycroft-mimic3-tts
+
+# pip freeze > requirements.txt
+
+
 
