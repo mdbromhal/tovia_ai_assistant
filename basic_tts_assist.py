@@ -24,11 +24,49 @@ import subprocess
 import requests
 import time
 import sys
+import select
 from thefuzz import process, fuzz
+import threading
+from pydub import AudioSegment
+from pydub.playback import play
+import termios
+import tty
+from pynput import keyboard
+
+
+class SpeechInterface:
+    def __init__(self, model_path):
+        self.model = Model(model_path)
+        self.recognizer = KaldiRecognizer(self.model, 16000)
+        self.recognizer.SetWords(True)
+
+        self.queue = queue.Queue()
+        self.stream = sd.RawInputStream(
+            samplerate=16000,
+            blocksize=8000,
+            dtype='int16',
+            channels=1,
+            callback=self._callback
+        )
+    
+
+    def _callback(self, indata, frames, time_info, status):
+        if not bot_speaking:
+            self.queue.put(bytes(indata))
+
+    
+    def start(self):
+        self.stream.start()
+
+    
+    def stop(self):
+        self.stream.stop()
+
 
 
 # Global flags
 bot_speaking = False
+stop_requested = False # Interrupt speech generation
 
 
 def is_fuzzy_trigger(trigger, string):
@@ -62,51 +100,138 @@ def make_callback(q):
     return callback
 
 
-def server_speak(text, voice, q):
-    global bot_speaking
-    bot_speaking = True
+def start_keyboard_listener():
+    def on_press(key):
+        global stop_requested
+        try:
+            if key.char == 'q':
+                stop_requested = True
+                print("[Keyboard] 'q' pressed. Interripting...")
+                return False # Stop listener
+        except AttributeError:
+            pass # Special keys ~ Shift/Ctrl/ect.
     
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+
+
+def server_speak(text, voice, speech: SpeechInterface):
+    global bot_speaking, stop_requested
+    bot_speaking = True
+    stop_requested = False
+
+    # def keyboard_listener():
+    #     global stop_requested
+    #     print("[Press 'q' to stop speaking]")
+
+    #     fd = sys.stdin.fileno()
+    #     old_settings = termios.tcgetattr(fd)
+
+    #     try:
+    #         tty.setcbreak(fd) # Non-blocking mode
+    #         while not stop_requested:
+    #             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+    #                 # key = sys.stdin.readline().strip().lower()
+    #                 key = sys.stdin.read(1)
+    #                 if key.lower() == 'q':
+    #                     stop_requested = True
+    #                     print("\n[Keyboard] 'q' pressed. Stopping speech.")
+    #                     break
+    #             time.sleep(0.05)
+    #     finally:
+    #         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    start_keyboard_listener()
+
+    # Listens for "stop" in background while speaking
+    # def listen_for_stop():
+    #     global stop_requested
+
+    #     while not stop_requested:
+    #         if not speech.queue.empty():
+    #             data = speech.queue.get()
+    #             if speech.recognizer.AcceptWaveform(data):
+    #                 result = json.loads(speech.recognizer.Result())
+    #                 command = result.get("text", "").lower()
+    #                 if "stop" in command:
+    #                     print("\n[Voice Command] Interruption Requested.")
+    #                     nonlocal process
+    #                     stop_requested = True
+    #                     process.terminate()
+    #                     break
+
+    # listener_thread = threading.Thread(target=listen_for_stop)
+    # listener_thread.start()
+
+    # keyboard_thread = threading.Thread(target=keyboard_listener, daemon=True)
+    # keyboard_thread.start()
+
+
+    # Call TTS & play audio
     url = "http://localhost:59125/api/tts"
 
     response = requests.post(url, data=text, params={"voice": voice})
     with open("output.wav", "wb") as f:
         f.write(response.content)
-    
-    subprocess.run(["afplay", "output.wav"])
 
-    # Let echo fade
-    time.sleep(0.3)
+    # process = subprocess.Popen(["afplay", "output.wav"])
+    sound = AudioSegment.from_file("output.wav")
+    play_thread = threading.Thread(target=play, args=(sound,))
+    play_thread.start()
 
-    # Resetting flag
+    # Monitor playback
+    #while process.poll() is None:
+    while play_thread.is_alive():
+        if stop_requested:
+            # process.terminate()
+            # print("[System] Audio playback stopped.")
+            break
+        time.sleep(0.1)
+
+    # listener_thread.join()
+    # keyboard_thread.join()
     bot_speaking = False
+    with speech.queue.mutex:
+        speech.queue.queue.clear()
 
-    # Clearing any leftover audio
-    with q.mutex:
-        q.queue.clear()
+    # stop_thread.join()
+
+    # subprocess.run(["afplay", "output.wav"])
+
+    # # Let echo fade
+    # #time.sleep(0.3)
+
+    # # Resetting flag
+    # bot_speaking = False
+    # # stop_requested = False
+
+    # # Clearing any leftover audio
+    # with q.mutex:
+    #     q.queue.clear()
 
 
-def start_listening(STT_MODEL_PATH):
-    """Starts vosk's model listening to the user with the system's microphone."""
-    # Load offline Vosk model (download first from Vosk's website)
-    if not os.path.exists(STT_MODEL_PATH):
-        print("Please download the Vosk model and place it in the 'model' folder.")
-        exit(1)
+# def start_listening(STT_MODEL_PATH, assistant_name):
+#     """Starts vosk's model listening to the user with the system's microphone."""
+#     # Load offline Vosk model (download first from Vosk's website)
+#     if not os.path.exists(STT_MODEL_PATH):
+#         print("Please download the Vosk model and place it in the 'model' folder.")
+#         exit(1)
 
-    # Initialize Vosk speech recognizer
-    model = Model(STT_MODEL_PATH) # Loads the vosk model
+#     # Initialize Vosk speech recognizer
+#     model = Model(STT_MODEL_PATH) # Loads the vosk model
 
 
-    rec = KaldiRecognizer(model, 16000) # Sample rate as 16kHz (standard for voice)
-    rec.SetWords(True) # Words level processing
+#     rec = KaldiRecognizer(model, 16000) # Sample rate as 16kHz (standard for voice)
+#     rec.SetWords(True) # Words level processing
 
-    # Audio recording parameters
-    samplerate = 16000 # How often sound is processed per second
-    q = queue.Queue() # Creates a queue to store the audio data -> avoid lag
+#     # Audio recording parameters
+#     samplerate = 16000 # How often sound is processed per second
+#     q = queue.Queue() # Creates a queue to store the audio data -> avoid lag
 
-    # Start listening
-    print("Say something starting with 'philip' (Ctrl+C to exit)...")
+#     # Start listening
+#     print(f"Say something starting with '{assistant_name}' (Ctrl+C to exit)...")
 
-    return q, rec, samplerate
+#     return q, rec, samplerate
 
 
 def warm_up_voice(voice):
@@ -119,100 +244,185 @@ def main():
     # Variables
     voice = "en_UK/apope_low" # "en_US/vctk_low"
     STT_MODEL_PATH = "/Users/mickey/vosk_model/vosk-model-small-en-us-0.15"
-    wake_words = ['tovia', 'to via', 'toby']
+    # wake_words = ['tovia', 'to via', 'toby']
     sleep_words = ['goodnight', 'good bye', 'goodbye', 'shut down', 'later gater', 'see you later']
     ai_model = "codellama:latest"
+    # device_id = 0 # Headphones w. microphone
+    assistant_name = "jarvis"
 
+    speech = SpeechInterface(STT_MODEL_PATH)
+    speech.start()
 
     # Functions
     warm_up_voice(voice)
-    q, rec, samplerate = start_listening(STT_MODEL_PATH)
+    # q, rec, samplerate = start_listening(STT_MODEL_PATH, assistant_name)
 
     # Starts listening w. sounddevice
-    stream = sd.RawInputStream(samplerate=samplerate, blocksize=8000, dtype='int16', # Blocksize in small chunks -> efficient
-                        channels=1, callback=make_callback(q)) # Callback to store audio
+    # stream = sd.RawInputStream(# device=device_id, 
+    #                            samplerate=samplerate, 
+    #                            blocksize=8000, # Blocksize in small chunks -> efficient
+    #                            dtype='int16', 
+    #                            channels=1, 
+    #                            callback=make_callback(q)) # Callback to store audio
     
     try:
-        with stream:
-            while True:
-                data = q.get() # Grabs audio
-                # print("Listening...", end="", flush=True)
-                print("\rListening...", end="", flush=True)
+        while True:
+            data = speech.queue.get()
 
-                if rec.AcceptWaveform(data): # Is speech detected?
-                    result = json.loads(rec.Result()) # Decodes the speech
+            print("\rListening...", end="", flush=True)
+
+            if speech.recognizer.AcceptWaveform(data):
+                result = json.loads(speech.recognizer.Result())
+                command = result.get("text", "").lower()
+
+                if command:
+                    print(f"\nYou said: {command}")
+
+                if is_trigger_word(['shut down', 'goodbye', 'good bye'], command):
+                    server_speak("Powering down.", voice, speech)
+                    break
+
+                elif command == assistant_name:
+                    server_speak("Yes Boss?", voice, speech)
+                    print(f"{assistant_name}: ", "Yes, Boss?")
                     
-                    # Else, listen and get command
-                    command = result.get("text", "").lower() # Responds to what was said
+                elif assistant_name in command:
+                    print("\a", end='', flush=True)
+                    actual_request = command.replace(assistant_name, "")
 
-                    if command != "":
-                        print(f"\nYou said: {command}", flush=True)
+                    response = requests.post(
+                        "http://localhost:11434/api/generate",
+                        json={"model": ai_model, 
+                            "prompt": actual_request,
+                            # "messages": [
+                            #     {"role": "system", "content": "Your name is Tovia. You are a helpful and witty assistant that helps develop software and robotics applications."},
+                            #     {"role": "user", "content": command}
+                            # ]
+                        },
+                        stream=True # Because llama3.2 is responding in a stream format
+                    )
 
-                    # # Basic command execution
-                    if is_trigger_word(sleep_words, command):
-                        server_speak("Goodbye, powering down.", voice, q)
-                        break
+                    buffer = ""
+                    word_count = 0
+                    first_token = True
+                    for line in response.iter_lines():
+
+                        # Check for stop requested
+                        if stop_requested:
+                            break
+                        
+                        if line:
+                            data = json.loads(line)
+                            token = data.get("response", "")
+
+                            if not token:
+                                continue
+
+                            # Print first token with the label
+                            if first_token:
+                                print(f"{assistant_name}: ", end="", flush=True)
+                                first_token = False
+
+                            # print each token without a newline
+                            print(token, end="", flush=True)
+                            buffer += token
+                            word_count += token.count(" ")
+
+                            # Speak every 5-7 words or with punctuation
+                            if token in {".", "!", "?", ","} or (word_count > 5):
+                                if buffer.strip():
+                                    server_speak(buffer.strip(), voice, speech)
+                                    buffer = ""
+                                    word_count = 0
+                            
+                            if data.get("done", False):
+                                break
+                    
+                    # Finish up leftover text
+                    if buffer.strip():
+                        server_speak(buffer.strip(), voice, speech)
+                    
+        # with stream:
+        #     while True:
+        #         data = q.get() # Grabs audio
+        #         # print("Listening...", end="", flush=True)
+        #         print("\rListening...", end="", flush=True)
+
+        #         if rec.AcceptWaveform(data): # Is speech detected?
+        #             result = json.loads(rec.Result()) # Decodes the speech
+                    
+        #             # Else, listen and get command
+        #             command = result.get("text", "").lower() # Responds to what was said
+
+        #             if command != "":
+        #                 print(f"\nYou said: {command}", flush=True)
+
+        #             # # Basic command execution
+        #             if is_trigger_word(sleep_words, command):
+        #                 server_speak("Goodbye, powering down.", voice, q, STT_MODEL_PATH)
+        #                 break
 
 
-                    if "philip" in command:
+        #             if assistant_name in command:
                     # if is_fuzzy_trigger("philip", command):
-                        print("\a", end='', flush=True)
+                        #print("\a", end='', flush=True)
                         
-                        actual_request = command.replace("philip", "")
+                        #actual_request = command.replace(assistant_name, "")
 
-                        response = requests.post(
-                            "http://localhost:11434/api/generate",
-                            json={"model": ai_model, 
-                                "prompt": actual_request,
-                                # "messages": [
-                                #     {"role": "system", "content": "Your name is Tovia. You are a helpful and witty assistant that helps develop software and robotics applications."},
-                                #     {"role": "user", "content": command}
-                                # ]
-                            },
-                            stream=True # Because llama3.2 is responding in a stream format
-                        )
+                        # response = requests.post(
+                        #     "http://localhost:11434/api/generate",
+                        #     json={"model": ai_model, 
+                        #         "prompt": actual_request,
+                        #         # "messages": [
+                        #         #     {"role": "system", "content": "Your name is Tovia. You are a helpful and witty assistant that helps develop software and robotics applications."},
+                        #         #     {"role": "user", "content": command}
+                        #         # ]
+                        #     },
+                        #     stream=True # Because llama3.2 is responding in a stream format
+                        # )
 
-                        buffer = ""
-                        word_count = 0
-                        first_token = True
-                        for line in response.iter_lines():
-                            if line:
-                                data = json.loads(line)
-                                token = data.get("response", "")
+                        # buffer = ""
+                        # word_count = 0
+                        # first_token = True
+                        # for line in response.iter_lines():
+                        #     if line:
+                        #         data = json.loads(line)
+                        #         token = data.get("response", "")
 
-                                if not token:
-                                    continue
+                        #         if not token:
+                        #             continue
 
-                                # Print first token with the label
-                                if first_token:
-                                    print("Tovia: ", end="", flush=True)
-                                    first_token = False
+                        #         # Print first token with the label
+                        #         if first_token:
+                        #             print(f"{assistant_name}: ", end="", flush=True)
+                        #             first_token = False
 
-                                # print each token without a newline
-                                print(token, end="", flush=True)
-                                buffer += token
-                                word_count += token.count(" ")
+                        #         # print each token without a newline
+                        #         print(token, end="", flush=True)
+                        #         buffer += token
+                        #         word_count += token.count(" ")
 
-                                # Speak every 5-7 words or with punctuation
-                                if token in {".", "!", "?"}:
-                                    if buffer.strip():
-                                        server_speak(buffer.strip(), voice, q)
-                                        buffer = ""
-                                        word_count = 0
+                        #         # Speak every 5-7 words or with punctuation
+                        #         if token in {".", "!", "?"}:
+                        #             if buffer.strip():
+                        #                 server_speak(buffer.strip(), voice, q, STT_MODEL_PATH)
+                        #                 buffer = ""
+                        #                 word_count = 0
                                 
-                                if data.get("done", False):
-                                    break
+                        #         if data.get("done", False):
+                        #             break
                         
-                        # Finish up leftover text
-                        if buffer.strip():
-                            server_speak(buffer.strip(), voice, q)
+                        # # Finish up leftover text
+                        # if buffer.strip():
+                        #     server_speak(buffer.strip(), voice, q, STT_MODEL_PATH)
                     
                     # else:
                     #     print(f"You said: {command.strip()}", flush=True)
 
     except KeyboardInterrupt:
-        print("\nTovia: Goodbye! Shutting down gracefully.")
-        stream.close()
+        print("\nShutting down.")
+        speech.stop()
+        # stream.close()
         sys.exit(0)
 
 

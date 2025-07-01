@@ -1,3 +1,4 @@
 INFO:mimic3_http.__main__:Starting web server
-[2025-06-15 08:30:15 -0400] [46298] [INFO] Running on http://0.0.0.0:59125 (CTRL + C to quit)
+[2025-07-01 15:59:04 -0400] [13979] [INFO] Running on http://0.0.0.0:59125 (CTRL + C to quit)
 INFO:hypercorn.error:Running on http://0.0.0.0:59125 (CTRL + C to quit)
+INFO:mimic3_tts.tts:Loaded voice from /Users/mickey/.local/share/mycroft/mimic3/voices/en_UK/apope_low

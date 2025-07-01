@@ -45,6 +45,13 @@ phonemes2ids==1.2.2
 priority==2.0.0
 protobuf==6.31.1
 pycparser==2.22
+pydub==0.25.1
+pynput==1.8.1
+pyobjc-core==11.1
+pyobjc-framework-ApplicationServices==11.1
+pyobjc-framework-Cocoa==11.1
+pyobjc-framework-CoreText==11.1
+pyobjc-framework-Quartz==11.1
 python-crfsuite==0.9.11
 python-dateutil==2.9.0.post0
 pytz==2025.2
@@ -54,6 +61,7 @@ quart-cors==0.8.0
 RapidFuzz==3.13.0
 regex==2024.11.6
 requests==2.32.4
+simpleaudio==1.0.4
 six==1.17.0
 sounddevice==0.5.2
 srt==3.5.3
