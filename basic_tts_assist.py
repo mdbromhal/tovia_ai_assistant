@@ -310,7 +310,7 @@ def main():
                         # Check for stop requested
                         if stop_requested:
                             break
-                        
+
                         if line:
                             data = json.loads(line)
                             token = data.get("response", "")
@@ -452,5 +452,7 @@ if __name__ == "__main__":
 # sudo tcpdump -i any
 
 
+# TAURI
+# npm run tauri dev in interruptor
 
 
